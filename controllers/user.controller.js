@@ -2,8 +2,9 @@ const Joi = require('joi');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const pool = require('../lib/db');
+const { keysToCamel } = require('../lib/utils');
 
-const adminEmail = 'nurbekrasulov711@gmail.com';
+const adminEmail = 'nurbekrasulov71@gmail.com';
 
 // Get current user info
 const getMe = async (req, res) => {
@@ -24,12 +25,12 @@ const getMe = async (req, res) => {
 const getProfile = async (req, res) => {
   try {
     const userId = req.user.id;
-    const query = 'SELECT id, email, "createdAt" FROM users WHERE id = $1';
+    const query = 'SELECT id, email, created_at FROM users WHERE id = $1';
     const result = await pool.query(query, [userId]);
 
     if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' });
 
-    res.json(result.rows[0]);
+    res.json(keysToCamel(result.rows[0]));
   } catch (error) {
     console.error('Get profile error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -42,12 +43,12 @@ const getFavorites = async (req, res) => {
     const userId = req.user.id;
     const query = `
       SELECT a.* FROM favorites f
-      JOIN articles a ON f."articleId" = a.id
-      WHERE f."userId" = $1
+      JOIN articles a ON f.article_id = a.id
+      WHERE f.user_id = $1
     `;
     const result = await pool.query(query, [userId]);
 
-    res.json(result.rows);
+    res.json(result.rows.map(row => keysToCamel(row)));
   } catch (error) {
     console.error('Get favorites error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -60,10 +61,13 @@ const addFavorite = async (req, res) => {
     const userId = req.user.id;
     const { articleId } = req.params;
 
-    const insertQuery = 'INSERT INTO favorites ("userId", "articleId") VALUES ($1, $2) RETURNING *';
-    const result = await pool.query(insertQuery, [userId, articleId]);
+    // Generate ID
+    const id = 'fav-' + Date.now();
 
-    res.status(201).json(result.rows[0]);
+    const insertQuery = 'INSERT INTO favorites (id, user_id, article_id) VALUES ($1, $2, $3) RETURNING *';
+    const result = await pool.query(insertQuery, [id, userId, articleId]);
+
+    res.status(201).json(keysToCamel(result.rows[0]));
   } catch (error) {
     console.error('Add favorite error:', error);
     if (error.code === '23505') {
@@ -79,7 +83,7 @@ const removeFavorite = async (req, res) => {
     const userId = req.user.id;
     const { articleId } = req.params;
 
-    const deleteQuery = 'DELETE FROM favorites WHERE "userId" = $1 AND "articleId" = $2';
+    const deleteQuery = 'DELETE FROM favorites WHERE user_id = $1 AND article_id = $2';
     await pool.query(deleteQuery, [userId, articleId]);
 
     res.json({ message: 'Article removed from favorites' });
@@ -124,9 +128,9 @@ const createUser = async (req, res) => {
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Insert user
+    // Insert user (timestamps handled by database)
     const id = 'user-' + Date.now();
-    const insertQuery = 'INSERT INTO users (id, email, password, "createdAt", "updatedAt") VALUES ($1, $2, $3, NOW(), NOW()) RETURNING id, email, "createdAt"';
+    const insertQuery = 'INSERT INTO users (id, email, password) VALUES ($1, $2, $3) RETURNING id, email';
     const result = await pool.query(insertQuery, [id, email, hashedPassword]);
 
     res.status(201).json(result.rows[0]);
@@ -144,10 +148,10 @@ const getAllUsers = async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    const query = 'SELECT id, email, "createdAt" FROM users ORDER BY "createdAt" DESC';
+    const query = 'SELECT id, email, created_at FROM users ORDER BY created_at DESC';
     const result = await pool.query(query);
 
-    res.json(result.rows);
+    res.json(result.rows.map(row => keysToCamel(row)));
   } catch (error) {
     console.error('Get all users error:', error);
     res.status(500).json({ error: 'Internal server error' });

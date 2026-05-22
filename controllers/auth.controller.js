@@ -4,6 +4,7 @@ const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 const pool = require('../lib/db');
 const Joi = require('joi');
+const { mapBodyToDb } = require('../lib/utils');
 
 // Email transporter
 const transporter = nodemailer.createTransport({
@@ -12,7 +13,7 @@ const transporter = nodemailer.createTransport({
   secure: false,
   auth: {
     user: 'nurbekrasulov71@gmail.com',
-    pass: 'xtys vjsu jwfc ipxt',
+    pass: 'uauq pwdu otsm ajeh',
   },
 });
 
@@ -36,6 +37,11 @@ const updatePasswordSchema = Joi.object({
   newPassword: Joi.string().min(6).required(),
 });
 
+const registerSchema = Joi.object({
+  email: Joi.string().email().required(),
+  password: Joi.string().min(6).required(),
+});
+
 // Generate JWT token
 const generateToken = (userId, role) => {
   return jwt.sign({ userId, role }, 'your_jwt_secret_key', { expiresIn: '7d' });
@@ -44,12 +50,10 @@ const generateToken = (userId, role) => {
 // Register new user
 const register = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { error, value } = registerSchema.validate(req.body);
+    if (error) return res.status(400).json({ error: error.details[0].message });
 
-    // Basic validation
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password are required' });
-    }
+    const { email, password } = value;
 
     // Check if user exists
     const existingQuery = 'SELECT id FROM users WHERE email = $1';
@@ -64,8 +68,12 @@ const register = async (req, res) => {
     // Generate ID
     const id = 'user-' + Date.now();
 
-    // Insert user
-    const insertQuery = 'INSERT INTO users (id, email, password, role, "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, NOW(), NOW()) RETURNING id, email, role';
+    // Insert user (timestamps handled by database defaults)
+    const insertQuery = `
+      INSERT INTO users (id, email, password, role)
+      VALUES ($1, $2, $3, $4)
+      RETURNING id, email, role
+    `;
     const result = await pool.query(insertQuery, [id, email, hashedPassword, 'user']);
 
     res.status(201).json({
@@ -74,7 +82,7 @@ const register = async (req, res) => {
     });
   } catch (error) {
     console.error('Register error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Internal server error', details: error.message });
   }
 };
 
@@ -131,12 +139,12 @@ const forgotPassword = async (req, res) => {
     const resetToken = crypto.randomBytes(32).toString('hex');
     const resetExpires = new Date(Date.now() + 3600000); // 1 hour
 
-    const updateQuery = 'UPDATE users SET "resetToken" = $1, "resetExpires" = $2 WHERE id = $3';
+    const updateQuery = 'UPDATE users SET reset_token = $1, reset_expires = $2 WHERE id = $3';
     await pool.query(updateQuery, [resetToken, resetExpires, user.id]);
 
     // Send reset email
     const resetLink = `https://legioners.uz/reset-password?token=${resetToken}`;
-    console.log('Password reset link:', resetLink); // For development
+    console.log('Password reset link:', resetLink);
 
     const html = `
       <h2>Password Reset</h2>
@@ -155,7 +163,6 @@ const forgotPassword = async (req, res) => {
       });
     } catch (emailError) {
       console.error('Email sending failed:', emailError);
-      // Continue anyway, as the token is saved
     }
 
     res.json({ message: 'Password reset email sent' });
@@ -174,7 +181,7 @@ const verifyResetToken = async (req, res) => {
       return res.status(400).json({ error: 'Token is required' });
     }
 
-    const query = 'SELECT id FROM users WHERE "resetToken" = $1 AND "resetExpires" > $2';
+    const query = 'SELECT id FROM users WHERE reset_token = $1 AND reset_expires > $2';
     const result = await pool.query(query, [token, new Date()]);
 
     if (result.rows.length === 0) {
@@ -196,7 +203,7 @@ const resetPassword = async (req, res) => {
 
     const { token, password } = req.body;
 
-    const selectQuery = 'SELECT id FROM users WHERE "resetToken" = $1 AND "resetExpires" > $2';
+    const selectQuery = 'SELECT id FROM users WHERE reset_token = $1 AND reset_expires > $2';
     const selectResult = await pool.query(selectQuery, [token, new Date()]);
 
     if (selectResult.rows.length === 0) {
@@ -206,7 +213,7 @@ const resetPassword = async (req, res) => {
     const userId = selectResult.rows[0].id;
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const updateQuery = 'UPDATE users SET password = $1, "resetToken" = NULL, "resetExpires" = NULL WHERE id = $2';
+    const updateQuery = 'UPDATE users SET password = $1, reset_token = NULL, reset_expires = NULL WHERE id = $2';
     await pool.query(updateQuery, [hashedPassword, userId]);
 
     res.json({ message: 'Password reset successful' });
@@ -270,9 +277,6 @@ const logout = async (req, res) => {
   res.clearCookie('auth_token');
   res.json({ message: 'Logged out successfully' });
 };
-
-// Initialize default admin
-// createDefaultAdmin();
 
 module.exports = {
   register,

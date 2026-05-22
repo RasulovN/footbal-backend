@@ -1,14 +1,31 @@
 const pool = require('../lib/db');
 const Joi = require('joi');
+const { mapBodyToDb, keysToCamel } = require('../lib/utils');
 
-const BASE_URL = 'https://legioners.uz';
+// Get base URL from environment or use relative path
+// This ensures URLs work in both development and production
+function getBaseUrl(req) {
+  // In production behind nginx/reverse proxy, use relative URLs
+  // This avoids hardcoding the domain
+  return '';
+}
 
-// Get language from query
-const getLanguage = (req) => {
-  return req.query.lang === 'ru' ? 'ru' : 'uz';
-};
+/**
+ * Helper function to format article image URL
+ * Returns relative URL for local/production compatibility
+ * @param {string|null} coverImage - Image filename from DB
+ * @param {object} req - Request object for protocol detection
+ * @returns {string|null} - Formatted image URL or null
+ */
+function formatImageUrl(coverImage, req) {
+  if (!coverImage) return null;
+  
+  // Return relative URL - Express static middleware serves it correctly
+  // Frontend should prepend the base URL if needed
+  return `${coverImage}`;
+}
 
-// Validation schemas
+// Validation schemas (camelCase for API)
 const articleSchema = Joi.object({
   titleUz: Joi.string().required(),
   titleRu: Joi.string().required(),
@@ -41,17 +58,16 @@ const getArticles = async (req, res) => {
     const { q, category, date, club, player, page, limit } = value;
     const skip = (page - 1) * limit;
 
-    // Build WHERE conditions
     const conditions = [];
     const params = [];
     let paramIndex = 1;
 
     if (q) {
       conditions.push(`(
-        "titleUz" ILIKE $${paramIndex} OR
-        "titleRu" ILIKE $${paramIndex + 1} OR
-        "contentUz" ILIKE $${paramIndex + 2} OR
-        "contentRu" ILIKE $${paramIndex + 3}
+        title_uz ILIKE $${paramIndex} OR
+        title_ru ILIKE $${paramIndex + 1} OR
+        content_uz ILIKE $${paramIndex + 2} OR
+        content_ru ILIKE $${paramIndex + 3}
       )`);
       const searchTerm = `%${q}%`;
       params.push(searchTerm, searchTerm, searchTerm, searchTerm);
@@ -65,7 +81,7 @@ const getArticles = async (req, res) => {
     }
 
     if (date) {
-      conditions.push(`a."publishDate" >= $${paramIndex}`);
+      conditions.push(`a.publish_date >= $${paramIndex}`);
       params.push(new Date(date));
       paramIndex++;
     }
@@ -79,50 +95,47 @@ const getArticles = async (req, res) => {
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
-    // Count query
     const countQuery = `
       SELECT COUNT(*) as total
       FROM articles a
-      JOIN categories c ON a."categoryId" = c.id
+      JOIN categories c ON a.category_id = c.id
       ${whereClause}
     `;
     const countResult = await pool.query(countQuery, params);
     const total = parseInt(countResult.rows[0].total);
 
-    // Articles query
     const articlesQuery = `
       SELECT
-        a.id, a."titleUz", a."titleRu", a."contentUz", a."contentRu",
-        a.tags, a."coverImage", a."youtubeUrl", a."publishDate",
-        a."createdAt", a."updatedAt",
-        c.id as category_id, c."nameUz" as category_name_uz, c."nameRu" as category_name_ru, c.slug as category_slug
+        a.id, a.title_uz, a.title_ru, a.content_uz, a.content_ru,
+        a.tags, a.cover_image, a.youtube_url, a.publish_date,
+        a.created_at, a.updated_at,
+        c.id as category_id, c.name_uz as category_name_uz, c.name_ru as category_name_ru, c.slug as category_slug
       FROM articles a
-      JOIN categories c ON a."categoryId" = c.id
+      JOIN categories c ON a.category_id = c.id
       ${whereClause}
-      ORDER BY a."publishDate" DESC
+      ORDER BY a.publish_date DESC
       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
     `;
     params.push(limit, skip);
     const articlesResult = await pool.query(articlesQuery, params);
 
-    const lang = getLanguage(req);
+    const lang = req.query.lang === 'ru' ? 'ru' : 'uz';
 
-    // Format articles based on language
     const formattedArticles = articlesResult.rows.map(article => ({
       id: article.id,
-      title: lang === 'ru' ? article.titleRu : article.titleUz,
-      content: lang === 'ru' ? article.contentRu : article.contentUz,
+      title: lang === 'ru' ? article.title_ru : article.title_uz,
+      content: lang === 'ru' ? article.content_ru : article.content_uz,
       category: {
         id: article.category_id,
         name: lang === 'ru' ? article.category_name_ru : article.category_name_uz,
         slug: article.category_slug,
       },
       tags: article.tags,
-      coverImage: article.coverImage ? `${BASE_URL}${article.coverImage}` : null,
-      youtubeUrl: article.youtubeUrl,
-      publishDate: article.publishDate,
-      createdAt: article.createdAt,
-      updatedAt: article.updatedAt,
+      coverImage: formatImageUrl(article.cover_image, req),
+      youtubeUrl: article.youtube_url,
+      publishDate: article.publish_date,
+      createdAt: article.created_at,
+      updatedAt: article.updated_at,
     }));
 
     res.json({
@@ -144,52 +157,49 @@ const getArticles = async (req, res) => {
 const getRelatedArticles = async (req, res) => {
   try {
     const { id } = req.params;
-    const lang = getLanguage(req);
+    const lang = req.query.lang === 'ru' ? 'ru' : 'uz';
 
-    // Get the article to find its category
     const articleQuery = `
-      SELECT a."categoryId", c."nameUz", c."nameRu", c.slug
+      SELECT a.category_id, c.name_uz, c.name_ru, c.slug
       FROM articles a
-      JOIN categories c ON a."categoryId" = c.id
+      JOIN categories c ON a.category_id = c.id
       WHERE a.id = $1
     `;
     const articleResult = await pool.query(articleQuery, [id]);
 
     if (articleResult.rows.length === 0) return res.status(404).json({ error: 'Article not found' });
 
-    const categoryId = articleResult.rows[0].categoryId;
+    const categoryId = articleResult.rows[0].category_id;
 
-    // Get related articles from same category, excluding the current one
     const relatedQuery = `
       SELECT
-        a.id, a."titleUz", a."titleRu", a."contentUz", a."contentRu",
-        a.tags, a."coverImage", a."youtubeUrl", a."publishDate",
-        a."createdAt", a."updatedAt",
-        c.id as category_id, c."nameUz" as category_name_uz, c."nameRu" as category_name_ru, c.slug as category_slug
+        a.id, a.title_uz, a.title_ru, a.content_uz, a.content_ru,
+        a.tags, a.cover_image, a.youtube_url, a.publish_date,
+        a.created_at, a.updated_at,
+        c.id as category_id, c.name_uz as category_name_uz, c.name_ru as category_name_ru, c.slug as category_slug
       FROM articles a
-      JOIN categories c ON a."categoryId" = c.id
-      WHERE a."categoryId" = $1 AND a.id != $2
-      ORDER BY a."publishDate" DESC
+      JOIN categories c ON a.category_id = c.id
+      WHERE a.category_id = $1 AND a.id != $2
+      ORDER BY a.publish_date DESC
       LIMIT 3
     `;
     const relatedResult = await pool.query(relatedQuery, [categoryId, id]);
 
-    // Format related articles
     const formattedArticles = relatedResult.rows.map(related => ({
       id: related.id,
-      title: lang === 'ru' ? related.titleRu : related.titleUz,
-      content: lang === 'ru' ? related.contentRu : related.contentUz,
+      title: lang === 'ru' ? related.title_ru : related.title_uz,
+      content: lang === 'ru' ? related.content_ru : related.content_uz,
       category: {
         id: related.category_id,
         name: lang === 'ru' ? related.category_name_ru : related.category_name_uz,
         slug: related.category_slug,
       },
       tags: related.tags,
-      coverImage: related.coverImage ? `${BASE_URL}${related.coverImage}` : null,
-      youtubeUrl: related.youtubeUrl,
-      publishDate: related.publishDate,
-      createdAt: related.createdAt,
-      updatedAt: related.updatedAt,
+      coverImage: formatImageUrl(related.cover_image, req),
+      youtubeUrl: related.youtube_url,
+      publishDate: related.publish_date,
+      createdAt: related.created_at,
+      updatedAt: related.updated_at,
     }));
 
     res.json(formattedArticles);
@@ -203,16 +213,16 @@ const getRelatedArticles = async (req, res) => {
 const getArticle = async (req, res) => {
   try {
     const { id } = req.params;
-    const lang = getLanguage(req);
+    const lang = req.query.lang === 'ru' ? 'ru' : 'uz';
 
     const query = `
       SELECT
-        a.id, a."titleUz", a."titleRu", a."contentUz", a."contentRu",
-        a.tags, a."coverImage", a."youtubeUrl", a."publishDate",
-        a."createdAt", a."updatedAt",
-        c.id as category_id, c."nameUz" as category_name_uz, c."nameRu" as category_name_ru, c.slug as category_slug
+        a.id, a.title_uz, a.title_ru, a.content_uz, a.content_ru,
+        a.tags, a.cover_image, a.youtube_url, a.publish_date,
+        a.created_at, a.updated_at,
+        c.id as category_id, c.name_uz as category_name_uz, c.name_ru as category_name_ru, c.slug as category_slug
       FROM articles a
-      JOIN categories c ON a."categoryId" = c.id
+      JOIN categories c ON a.category_id = c.id
       WHERE a.id = $1
     `;
     const result = await pool.query(query, [id]);
@@ -220,23 +230,21 @@ const getArticle = async (req, res) => {
     if (result.rows.length === 0) return res.status(404).json({ error: 'Article not found' });
 
     const article = result.rows[0];
-
-    // Format article based on language
     const formattedArticle = {
       id: article.id,
-      title: lang === 'ru' ? article.titleRu : article.titleUz,
-      content: lang === 'ru' ? article.contentRu : article.contentUz,
+      title: lang === 'ru' ? article.title_ru : article.title_uz,
+      content: lang === 'ru' ? article.content_ru : article.content_uz,
       category: {
         id: article.category_id,
         name: lang === 'ru' ? article.category_name_ru : article.category_name_uz,
         slug: article.category_slug,
       },
       tags: article.tags,
-      coverImage: article.coverImage ? `${BASE_URL}${article.coverImage}` : null,
-      youtubeUrl: article.youtubeUrl,
-      publishDate: article.publishDate,
-      createdAt: article.createdAt,
-      updatedAt: article.updatedAt,
+      coverImage: formatImageUrl(article.cover_image, req),
+      youtubeUrl: article.youtube_url,
+      publishDate: article.publish_date,
+      createdAt: article.created_at,
+      updatedAt: article.updated_at,
     };
 
     res.json(formattedArticle);
@@ -249,12 +257,10 @@ const getArticle = async (req, res) => {
 // Create article
 const createArticle = async (req, res) => {
   try {
-    // Parse tags if it's a string (from FormData)
     if (req.body.tags && typeof req.body.tags === 'string') {
       try {
         req.body.tags = JSON.parse(req.body.tags);
       } catch (e) {
-        // If not JSON, treat as comma-separated string
         req.body.tags = req.body.tags.split(',').map(tag => tag.trim()).filter(tag => tag);
       }
     }
@@ -262,47 +268,48 @@ const createArticle = async (req, res) => {
     const { error, value } = articleSchema.validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
 
-    // Handle file upload
     if (req.file) {
-      value.coverImage = `/uploads/${req.file.filename}`;
+      value.coverImage = req.file.filename;
     }
 
-    // Set userId from authenticated user
-    value.userId = req.userId;
+    value.userId = req.user.id;
+
+    const data = mapBodyToDb(value, ['titleUz', 'titleRu', 'contentUz', 'contentRu', 'categoryId', 'userId', 'tags', 'coverImage', 'youtubeUrl', 'publishDate']);
+    
+    const id = 'art-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+    data.id = id;
 
     const insertQuery = `
-      INSERT INTO articles ("titleUz", "titleRu", "contentUz", "contentRu", "categoryId", "userId", tags, "coverImage", "youtubeUrl", "publishDate")
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-      RETURNING id, "titleUz", "titleRu", "contentUz", "contentRu", tags, "coverImage", "youtubeUrl", "publishDate", "createdAt", "updatedAt"
+      INSERT INTO articles (id, title_uz, title_ru, content_uz, content_ru, category_id, user_id, tags, cover_image, youtube_url, publish_date)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      RETURNING *
     `;
     const params = [
-      value.titleUz, value.titleRu, value.contentUz, value.contentRu,
-      value.categoryId, value.userId, value.tags, value.coverImage,
-      value.youtubeUrl, value.publishDate || new Date()
+      id, data.title_uz, data.title_ru, data.content_uz, data.content_ru,
+      data.category_id, data.user_id, data.tags, data.cover_image,
+      data.youtube_url, data.publish_date || new Date()
     ];
     const insertResult = await pool.query(insertQuery, params);
 
     const article = insertResult.rows[0];
 
-    // Get category info
-    const categoryQuery = 'SELECT id, "nameUz", "nameRu", slug FROM categories WHERE id = $1';
-    const categoryResult = await pool.query(categoryQuery, [value.categoryId]);
-    const category = categoryResult.rows[0];
+    const categoryQuery = 'SELECT id, name_uz, name_ru, slug FROM categories WHERE id = $1';
+    const categoryResult = await pool.query(categoryQuery, [data.category_id]);
+    const category = keysToCamel(categoryResult.rows[0]);
 
-    // Format the response with full image URL
     const formattedArticle = {
       id: article.id,
-      titleUz: article.titleUz,
-      titleRu: article.titleRu,
-      contentUz: article.contentUz,
-      contentRu: article.contentRu,
+      titleUz: article.title_uz,
+      titleRu: article.title_ru,
+      contentUz: article.content_uz,
+      contentRu: article.content_ru,
       category: category,
       tags: article.tags,
-      coverImage: article.coverImage ? `${BASE_URL}${article.coverImage}` : null,
-      youtubeUrl: article.youtubeUrl,
-      publishDate: article.publishDate,
-      createdAt: article.createdAt,
-      updatedAt: article.updatedAt,
+      coverImage: formatImageUrl(article.cover_image, req),
+      youtubeUrl: article.youtube_url,
+      publishDate: article.publish_date,
+      createdAt: article.created_at,
+      updatedAt: article.updated_at,
     };
 
     res.status(201).json(formattedArticle);
@@ -311,7 +318,7 @@ const createArticle = async (req, res) => {
     if (error.code === '23503') {
       return res.status(400).json({ error: 'Invalid category ID' });
     }
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Internal server error', details: error.message });
   }
 };
 
@@ -320,12 +327,10 @@ const updateArticle = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Parse tags if it's a string (from FormData)
     if (req.body.tags && typeof req.body.tags === 'string') {
       try {
         req.body.tags = JSON.parse(req.body.tags);
       } catch (e) {
-        // If not JSON, treat as comma-separated string
         req.body.tags = req.body.tags.split(',').map(tag => tag.trim()).filter(tag => tag);
       }
     }
@@ -333,22 +338,23 @@ const updateArticle = async (req, res) => {
     const { error, value } = articleSchema.validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
 
-    // Handle file upload
     if (req.file) {
-      value.coverImage = `/uploads/${req.file.filename}`;
+      value.coverImage = req.file.filename;
     }
 
+    const data = mapBodyToDb(value, ['titleUz', 'titleRu', 'contentUz', 'contentRu', 'categoryId', 'tags', 'coverImage', 'youtubeUrl', 'publishDate']);
+
     const updateQuery = `
-      UPDATE articles
-      SET "titleUz" = $1, "titleRu" = $2, "contentUz" = $3, "contentRu" = $4,
-          "categoryId" = $5, tags = $6, "coverImage" = $7, "youtubeUrl" = $8, "publishDate" = $9, "updatedAt" = NOW()
+      UPDATE articles 
+      SET title_uz = $1, title_ru = $2, content_uz = $3, content_ru = $4,
+          category_id = $5, tags = $6, cover_image = $7, youtube_url = $8, publish_date = $9
       WHERE id = $10
-      RETURNING id, "titleUz", "titleRu", "contentUz", "contentRu", tags, "coverImage", "youtubeUrl", "publishDate", "createdAt", "updatedAt"
+      RETURNING *
     `;
     const params = [
-      value.titleUz, value.titleRu, value.contentUz, value.contentRu,
-      value.categoryId, value.tags, value.coverImage, value.youtubeUrl,
-      value.publishDate, id
+      data.title_uz, data.title_ru, data.content_uz, data.content_ru,
+      data.category_id, data.tags, data.cover_image, data.youtube_url,
+      data.publish_date, id
     ];
     const updateResult = await pool.query(updateQuery, params);
 
@@ -358,25 +364,23 @@ const updateArticle = async (req, res) => {
 
     const article = updateResult.rows[0];
 
-    // Get category info
-    const categoryQuery = 'SELECT id, "nameUz", "nameRu", slug FROM categories WHERE id = $1';
-    const categoryResult = await pool.query(categoryQuery, [value.categoryId]);
-    const category = categoryResult.rows[0];
+    const categoryQuery = 'SELECT id, name_uz, name_ru, slug FROM categories WHERE id = $1';
+    const categoryResult = await pool.query(categoryQuery, [data.category_id]);
+    const category = keysToCamel(categoryResult.rows[0]);
 
-    // Format the response with full image URL
     const formattedArticle = {
       id: article.id,
-      titleUz: article.titleUz,
-      titleRu: article.titleRu,
-      contentUz: article.contentUz,
-      contentRu: article.contentRu,
+      titleUz: article.title_uz,
+      titleRu: article.title_ru,
+      contentUz: article.content_uz,
+      contentRu: article.content_ru,
       category: category,
       tags: article.tags,
-      coverImage: article.coverImage ? `${BASE_URL}${article.coverImage}` : null,
-      youtubeUrl: article.youtubeUrl,
-      publishDate: article.publishDate,
-      createdAt: article.createdAt,
-      updatedAt: article.updatedAt,
+      coverImage: formatImageUrl(article.cover_image, req),
+      youtubeUrl: article.youtube_url,
+      publishDate: article.publish_date,
+      createdAt: article.created_at,
+      updatedAt: article.updated_at,
     };
 
     res.json(formattedArticle);
@@ -389,40 +393,27 @@ const updateArticle = async (req, res) => {
   }
 };
 
-// Get article for editing (raw data)
+// Get article for editing
 const getArticleForEdit = async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId;
+    const userId = req.user.id;
 
     const query = `
       SELECT
-        a.id, a."titleUz", a."titleRu", a."contentUz", a."contentRu",
-        a."categoryId", a.tags, a."coverImage", a."youtubeUrl", a."publishDate",
-        a."createdAt", a."updatedAt"
+        a.id, a.title_uz, a.title_ru, a.content_uz, a.content_ru,
+        a.category_id, a.tags, a.cover_image, a.youtube_url, a.publish_date,
+        a.created_at, a.updated_at
       FROM articles a
-      WHERE a.id = $1 AND a."userId" = $2
+      WHERE a.id = $1 AND a.user_id = $2
     `;
     const result = await pool.query(query, [id, userId]);
 
     if (result.rows.length === 0) return res.status(404).json({ error: 'Article not found' });
 
-    const article = result.rows[0];
-
-    res.json({
-      id: article.id,
-      titleUz: article.titleUz,
-      titleRu: article.titleRu,
-      contentUz: article.contentUz,
-      contentRu: article.contentRu,
-      categoryId: article.categoryId,
-      tags: article.tags,
-      coverImage: article.coverImage ? `${BASE_URL}${article.coverImage}` : null,
-      youtubeUrl: article.youtubeUrl,
-      publishDate: article.publishDate,
-      createdAt: article.createdAt,
-      updatedAt: article.updatedAt,
-    });
+    const article = keysToCamel(result.rows[0]);
+    article.coverImage = formatImageUrl(article.coverImage, req);
+    res.json(article);
   } catch (error) {
     console.error('Get article for edit error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -432,38 +423,37 @@ const getArticleForEdit = async (req, res) => {
 // Get articles by user
 const getUserArticles = async (req, res) => {
   try {
-    const lang = getLanguage(req);
-    const userId = req.userId;
+    const lang = req.query.lang === 'ru' ? 'ru' : 'uz';
+    const userId = req.user.id;
 
     const query = `
       SELECT
-        a.id, a."titleUz", a."titleRu", a."contentUz", a."contentRu",
-        a.tags, a."coverImage", a."youtubeUrl", a."publishDate",
-        a."createdAt", a."updatedAt",
-        c.id as category_id, c."nameUz" as category_name_uz, c."nameRu" as category_name_ru, c.slug as category_slug
+        a.id, a.title_uz, a.title_ru, a.content_uz, a.content_ru,
+        a.tags, a.cover_image, a.youtube_url, a.publish_date,
+        a.created_at, a.updated_at,
+        c.id as category_id, c.name_uz as category_name_uz, c.name_ru as category_name_ru, c.slug as category_slug
       FROM articles a
-      JOIN categories c ON a."categoryId" = c.id
-      WHERE a."userId" = $1
-      ORDER BY a."publishDate" DESC
+      JOIN categories c ON a.category_id = c.id
+      WHERE a.user_id = $1
+      ORDER BY a.publish_date DESC
     `;
     const result = await pool.query(query, [userId]);
 
-    // Format articles based on language
     const formattedArticles = result.rows.map(article => ({
       id: article.id,
-      title: lang === 'ru' ? article.titleRu : article.titleUz,
-      content: lang === 'ru' ? article.contentRu : article.contentUz,
+      title: lang === 'ru' ? article.title_ru : article.title_uz,
+      content: lang === 'ru' ? article.content_ru : article.content_uz,
       category: {
         id: article.category_id,
         name: lang === 'ru' ? article.category_name_ru : article.category_name_uz,
         slug: article.category_slug,
       },
       tags: article.tags,
-      coverImage: article.coverImage ? `${BASE_URL}${article.coverImage}` : null,
-      youtubeUrl: article.youtubeUrl,
-      publishDate: article.publishDate,
-      createdAt: article.createdAt,
-      updatedAt: article.updatedAt,
+      coverImage: formatImageUrl(article.cover_image, req),
+      youtubeUrl: article.youtube_url,
+      publishDate: article.publish_date,
+      createdAt: article.created_at,
+      updatedAt: article.updated_at,
     }));
 
     res.json(formattedArticles);

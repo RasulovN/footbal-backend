@@ -1,7 +1,8 @@
 const pool = require('../lib/db');
 const Joi = require('joi');
+const { mapBodyToDb, keysToCamel } = require('../lib/utils');
 
-// Validation schemas
+// Validation schemas (camelCase for API)
 const categorySchema = Joi.object({
   nameUz: Joi.string().required(),
   nameRu: Joi.string().required(),
@@ -11,9 +12,16 @@ const categorySchema = Joi.object({
 // Get all categories
 const getCategories = async (req, res) => {
   try {
-    const query = 'SELECT id, "nameUz", "nameRu", slug, "createdAt", "updatedAt" FROM categories ORDER BY "createdAt" DESC';
+    const query = `
+      SELECT id, name_uz, name_ru, slug, created_at, updated_at 
+      FROM categories 
+      ORDER BY created_at DESC
+    `;
     const result = await pool.query(query);
-    res.json(result.rows);
+    
+    // Convert snake_case to camelCase for response
+    const formatted = result.rows.map(row => keysToCamel(row));
+    res.json(formatted);
   } catch (error) {
     console.error('Get categories error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -25,10 +33,10 @@ const getCategory = async (req, res) => {
   try {
     const { id } = req.params;
     const query = `
-      SELECT c.id, c."nameUz", c."nameRu", c.slug, c."createdAt", c."updatedAt",
+      SELECT c.id, c.name_uz, c.name_ru, c.slug, c.created_at, c.updated_at,
              json_agg(a.*) as articles
       FROM categories c
-      LEFT JOIN articles a ON c.id = a."categoryId"
+      LEFT JOIN articles a ON c.id = a.category_id
       WHERE c.id = $1
       GROUP BY c.id
     `;
@@ -36,9 +44,8 @@ const getCategory = async (req, res) => {
 
     if (result.rows.length === 0) return res.status(404).json({ error: 'Category not found' });
 
-    const category = result.rows[0];
-    category.articles = category.articles.filter(a => a !== null); // Remove nulls if no articles
-
+    const category = keysToCamel(result.rows[0]);
+    category.articles = category.articles ? category.articles.filter(a => a !== null) : [];
     res.json(category);
   } catch (error) {
     console.error('Get category error:', error);
@@ -52,16 +59,27 @@ const createCategory = async (req, res) => {
     const { error, value } = categorySchema.validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
 
-    const insertQuery = 'INSERT INTO categories ("nameUz", "nameRu", slug) VALUES ($1, $2, $3) RETURNING *';
-    const result = await pool.query(insertQuery, [value.nameUz, value.nameRu, value.slug]);
+    // Map camelCase to snake_case
+    const data = mapBodyToDb(value, ['nameUz', 'nameRu', 'slug']);
+    
+    // Generate ID
+    const id = 'cat-' + Date.now();
+    data.id = id;
 
-    res.status(201).json(result.rows[0]);
+    const insertQuery = `
+      INSERT INTO categories (id, name_uz, name_ru, slug)
+      VALUES ($1, $2, $3, $4)
+      RETURNING *
+    `;
+    const result = await pool.query(insertQuery, [id, data.name_uz, data.name_ru, data.slug]);
+
+    res.status(201).json(keysToCamel(result.rows[0]));
   } catch (error) {
     console.error('Create category error:', error);
     if (error.code === '23505') {
       return res.status(400).json({ error: 'Category slug already exists' });
     }
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Internal server error', details: error.message });
   }
 };
 
@@ -72,14 +90,22 @@ const updateCategory = async (req, res) => {
     const { error, value } = categorySchema.validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
 
-    const updateQuery = 'UPDATE categories SET "nameUz" = $1, "nameRu" = $2, slug = $3, "updatedAt" = NOW() WHERE id = $4 RETURNING *';
-    const result = await pool.query(updateQuery, [value.nameUz, value.nameRu, value.slug, id]);
+    // Map camelCase to snake_case
+    const data = mapBodyToDb(value, ['nameUz', 'nameRu', 'slug']);
+
+    const updateQuery = `
+      UPDATE categories 
+      SET name_uz = $1, name_ru = $2, slug = $3
+      WHERE id = $4
+      RETURNING *
+    `;
+    const result = await pool.query(updateQuery, [data.name_uz, data.name_ru, data.slug, id]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Category not found' });
     }
 
-    res.json(result.rows[0]);
+    res.json(keysToCamel(result.rows[0]));
   } catch (error) {
     console.error('Update category error:', error);
     if (error.code === '23505') {
@@ -103,6 +129,9 @@ const deleteCategory = async (req, res) => {
     res.json({ message: 'Category deleted successfully' });
   } catch (error) {
     console.error('Delete category error:', error);
+    if (error.code === '23503') {
+      return res.status(400).json({ error: 'Cannot delete category with existing articles' });
+    }
     res.status(500).json({ error: 'Internal server error' });
   }
 };
