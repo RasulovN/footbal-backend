@@ -15,7 +15,7 @@ const contactRoutes = require('./routes/contact.routes');
 
 const app = express();
 const PORT = Number(process.env.PORT || 4000);
-const UPLOADS_PATH = path.join(process.cwd(), 'uploads');
+const UPLOADS_PATH = process.env.UPLOADS_PATH || path.join(__dirname, 'uploads');
 let server;
 
 const allowedOrigins = (process.env.CORS_ORIGINS || [
@@ -45,6 +45,7 @@ app.disable('x-powered-by');
 app.use(helmet({
   contentSecurityPolicy: false,
   crossOriginEmbedderPolicy: false,
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
 }));
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
