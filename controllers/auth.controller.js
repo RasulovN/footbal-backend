@@ -286,7 +286,7 @@ const updatePassword = async (req, res) => {
 // Get current user
 const getMe = async (req, res) => {
   try {
-    const query = 'SELECT id, email FROM users WHERE id = $1';
+    const query = 'SELECT id, email, role FROM users WHERE id = $1';
     const result = await pool.query(query, [req.user.id]);
     const user = result.rows[0];
 

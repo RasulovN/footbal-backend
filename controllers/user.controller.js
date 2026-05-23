@@ -96,13 +96,15 @@ const createUser = async (req, res) => {
   try {
     const email = String(req.body.email || '').trim().toLowerCase();
     const password = String(req.body.password || '');
+    const role = req.body.role || 'user';
 
     // Validate input
     const schema = Joi.object({
       email: Joi.string().email().required(),
       password: Joi.string().min(6).required(),
+      role: Joi.string().valid('user', 'admin').optional(),
     });
-    const { error } = schema.validate({ email, password });
+    const { error } = schema.validate({ email, password, role });
     if (error) return res.status(400).json({ error: error.details[0].message });
 
     // Check if user exists
@@ -117,8 +119,8 @@ const createUser = async (req, res) => {
 
     // Insert user (timestamps handled by database)
     const id = 'user-' + Date.now();
-    const insertQuery = 'INSERT INTO users (id, email, password) VALUES ($1, $2, $3) RETURNING id, email';
-    const result = await pool.query(insertQuery, [id, email, hashedPassword]);
+    const insertQuery = 'INSERT INTO users (id, email, password, role) VALUES ($1, $2, $3, $4) RETURNING id, email, role';
+    const result = await pool.query(insertQuery, [id, email, hashedPassword, role]);
 
     res.status(201).json(result.rows[0]);
   } catch (error) {
