@@ -140,20 +140,81 @@ const createUser = async (req, res) => {
   }
 };
 
-// Get all users (admin only)
+// Get all users (authenticated users)
 const getAllUsers = async (req, res) => {
   try {
-    const userId = req.user.id;
-    if (!(await isAdmin(userId))) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
-
+    // Note: route already uses authenticate middleware.
+    // Any authenticated user can view users list.
     const query = 'SELECT id, email, created_at FROM users ORDER BY created_at DESC';
     const result = await pool.query(query);
 
     res.json(result.rows.map(row => keysToCamel(row)));
   } catch (error) {
     console.error('Get all users error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+
+// Update user (authenticated users)
+const updateUser = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { email, password } = req.body;
+
+    // Validate input
+    const schema = Joi.object({
+      email: Joi.string().email().required(),
+      password: Joi.string().min(6).optional().allow(''),
+    });
+    const { error } = schema.validate({ email, password });
+    if (error) return res.status(400).json({ error: error.details[0].message });
+
+    // Check if another user has this email
+    const existingQuery = 'SELECT id FROM users WHERE email = $1 AND id != $2';
+    const existing = await pool.query(existingQuery, [email, id]);
+    if (existing.rows.length > 0) {
+      return res.status(400).json({ error: 'Email already in use by another user' });
+    }
+
+    if (password && password.length >= 6) {
+      const hashedPassword = await bcrypt.hash(password, 10);
+      const updateQuery = 'UPDATE users SET email = $1, password = $2 WHERE id = $3 RETURNING id, email, created_at';
+      const result = await pool.query(updateQuery, [email, hashedPassword, id]);
+      if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+      res.json(keysToCamel(result.rows[0]));
+    } else {
+      const updateQuery = 'UPDATE users SET email = $1 WHERE id = $2 RETURNING id, email, created_at';
+      const result = await pool.query(updateQuery, [email, id]);
+      if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+      res.json(keysToCamel(result.rows[0]));
+    }
+  } catch (error) {
+    console.error('Update user error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// Delete user (authenticated users)
+const deleteUser = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Prevent deleting yourself
+    if (req.user.id === id) {
+      return res.status(400).json({ error: 'Cannot delete your own account' });
+    }
+
+    const deleteQuery = 'DELETE FROM users WHERE id = $1';
+    const result = await pool.query(deleteQuery, [id]);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({ message: 'User deleted successfully' });
+  } catch (error) {
+    console.error('Delete user error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 };
@@ -166,4 +227,6 @@ module.exports = {
   removeFavorite,
   createUser,
   getAllUsers,
+  updateUser,
+  deleteUser,
 };
