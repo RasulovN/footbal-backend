@@ -5,6 +5,7 @@ const rateLimit = require('express-rate-limit');
 const cookieParser = require('cookie-parser');
 const path = require('path');
 const pool = require('./lib/db');
+const bcrypt = require('bcryptjs');
 
 const authRoutes = require('./routes/auth.route');
 const newsRoutes = require('./routes/news.routes');
@@ -162,11 +163,30 @@ async function ensureSchema() {
   } catch (_) {}
 }
 
+async function ensureAdminUser() {
+  const adminEmail = process.env.ADMIN_EMAIL;
+  const adminPassword = process.env.ADMIN_PASSWORD;
+  if (!adminEmail || !adminPassword) return;
+
+  const normalizedEmail = adminEmail.trim().toLowerCase();
+  const existing = await pool.query('SELECT id FROM users WHERE lower(email) = $1', [normalizedEmail]);
+  if (existing.rows.length > 0) return;
+
+  const hashedPassword = await bcrypt.hash(adminPassword, 10);
+  const id = `user-${Date.now()}`;
+  await pool.query(
+    'INSERT INTO users (id, email, password, role) VALUES ($1, $2, $3, $4)',
+    [id, normalizedEmail, hashedPassword, 'admin'],
+  );
+  console.log('Admin user created from env');
+}
+
 async function startServer() {
   await pool.query('SELECT 1');
   if (process.env.AUTO_MIGRATE === 'true') {
     await ensureSchema();
   }
+  await ensureAdminUser();
   server = app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
   });

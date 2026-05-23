@@ -58,7 +58,8 @@ const register = async (req, res) => {
     const { error, value } = registerSchema.validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
 
-    const { email, password } = value;
+    const email = value.email.trim().toLowerCase();
+    const { password } = value;
 
     // Check if user exists
     const existingQuery = 'SELECT id FROM users WHERE email = $1';
@@ -97,9 +98,10 @@ const login = async (req, res) => {
     const { error } = loginSchema.validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
 
-    const { email, password } = req.body;
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const password = String(req.body.password || '');
 
-    const query = 'SELECT id, email, password, role FROM users WHERE email = $1';
+    const query = 'SELECT id, email, password, role FROM users WHERE lower(email) = $1';
     const result = await pool.query(query, [email]);
     const user = result.rows[0];
 
@@ -130,9 +132,9 @@ const forgotPassword = async (req, res) => {
     const { error } = forgotPasswordSchema.validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
 
-    const { email } = req.body;
+    const email = String(req.body.email || '').trim().toLowerCase();
 
-    const query = 'SELECT id FROM users WHERE email = $1';
+    const query = 'SELECT id FROM users WHERE lower(email) = $1';
     const result = await pool.query(query, [email]);
     const user = result.rows[0];
 

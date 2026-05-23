@@ -94,7 +94,8 @@ const removeFavorite = async (req, res) => {
 // Create new user (authenticated users)
 const createUser = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const password = String(req.body.password || '');
 
     // Validate input
     const schema = Joi.object({
@@ -105,7 +106,7 @@ const createUser = async (req, res) => {
     if (error) return res.status(400).json({ error: error.details[0].message });
 
     // Check if user exists
-    const existingQuery = 'SELECT id FROM users WHERE email = $1';
+    const existingQuery = 'SELECT id FROM users WHERE lower(email) = $1';
     const existing = await pool.query(existingQuery, [email]);
     if (existing.rows.length > 0) {
       return res.status(400).json({ error: 'User already exists' });
@@ -144,7 +145,8 @@ const getAllUsers = async (req, res) => {
 const updateUser = async (req, res) => {
   try {
     const { id } = req.params;
-    const { email, password } = req.body;
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const password = req.body.password ? String(req.body.password) : '';
 
     // Validate input
     const schema = Joi.object({
@@ -155,7 +157,7 @@ const updateUser = async (req, res) => {
     if (error) return res.status(400).json({ error: error.details[0].message });
 
     // Check if another user has this email
-    const existingQuery = 'SELECT id FROM users WHERE email = $1 AND id != $2';
+    const existingQuery = 'SELECT id FROM users WHERE lower(email) = $1 AND id != $2';
     const existing = await pool.query(existingQuery, [email, id]);
     if (existing.rows.length > 0) {
       return res.status(400).json({ error: 'Email already in use by another user' });
