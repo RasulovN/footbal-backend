@@ -109,7 +109,24 @@ const login = async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials user not found' });
     }
 
-    const isValidPassword = await bcrypt.compare(password, user.password);
+    let isValidPassword = false;
+    const looksHashed =
+      typeof user.password === 'string' &&
+      (user.password.startsWith('$2a$') ||
+        user.password.startsWith('$2b$') ||
+        user.password.startsWith('$2y$'));
+
+    if (looksHashed) {
+      isValidPassword = await bcrypt.compare(password, user.password);
+    } else {
+      // Fallback for legacy/plain passwords set directly in DB
+      isValidPassword = password === user.password;
+      if (isValidPassword) {
+        const hashedPassword = await bcrypt.hash(password, 10);
+        await pool.query('UPDATE users SET password = $1 WHERE id = $2', [hashedPassword, user.id]);
+      }
+    }
+
     if (!isValidPassword) {
       return res.status(401).json({ error: 'Invalid credentials password incorrect' });
     }
