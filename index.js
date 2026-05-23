@@ -14,7 +14,7 @@ const userRoutes = require('./routes/user.routes');
 const contactRoutes = require('./routes/contact.routes');
 
 const app = express();
-const PORT = Number(process.env.PORT || 3000);
+const PORT = Number(process.env.PORT || 4000);
 const UPLOADS_PATH = path.join(process.cwd(), 'uploads');
 let server;
 
