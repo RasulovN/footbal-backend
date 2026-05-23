@@ -164,7 +164,9 @@ async function ensureSchema() {
 
 async function startServer() {
   await pool.query('SELECT 1');
-  await ensureSchema();
+  if (process.env.AUTO_MIGRATE === 'true') {
+    await ensureSchema();
+  }
   server = app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
   });
