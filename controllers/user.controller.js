@@ -4,8 +4,6 @@ const bcrypt = require('bcryptjs');
 const pool = require('../lib/db');
 const { keysToCamel } = require('../lib/utils');
 
-const adminEmail = 'nurbekrasulov71@gmail.com';
-
 // Get current user info
 const getMe = async (req, res) => {
   try {
@@ -93,21 +91,9 @@ const removeFavorite = async (req, res) => {
   }
 };
 
-// Check if user is admin
-const isAdmin = async (userId) => {
-  const query = 'SELECT email FROM users WHERE id = $1';
-  const result = await pool.query(query, [userId]);
-  return result.rows.length > 0 && result.rows[0].email === adminEmail;
-};
-
-// Create new user (admin only)
+// Create new user (authenticated users)
 const createUser = async (req, res) => {
   try {
-    const userId = req.user.id;
-    if (!(await isAdmin(userId))) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
-
     const { email, password } = req.body;
 
     // Validate input
@@ -143,9 +129,7 @@ const createUser = async (req, res) => {
 // Get all users (authenticated users)
 const getAllUsers = async (req, res) => {
   try {
-    // Note: route already uses authenticate middleware.
-    // Any authenticated user can view users list.
-    const query = 'SELECT id, email, created_at FROM users ORDER BY created_at DESC';
+    const query = 'SELECT id, email, role, created_at FROM users ORDER BY created_at DESC';
     const result = await pool.query(query);
 
     res.json(result.rows.map(row => keysToCamel(row)));

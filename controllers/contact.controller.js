@@ -1,18 +1,21 @@
-const nodemailer = require('nodemailer');
 const pool = require('../lib/db');
 const Joi = require('joi');
-const { mapBodyToDb } = require('../lib/utils');
 
-// Email transporter
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 465,
-  secure: false,
-  auth: {
-    user: 'nurbekrasulov71@gmail.com',
-    pass: 'uauq pwdu otsm ajeh',
-  },
-});
+let mailTransporter = null;
+const getMailTransporter = () => {
+  if (mailTransporter) return mailTransporter;
+  const nodemailer = require('nodemailer');
+  mailTransporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST || 'smtp.gmail.com',
+    port: Number(process.env.SMTP_PORT || 465),
+    secure: process.env.SMTP_SECURE === 'true',
+    auth: {
+      user: process.env.SMTP_USER || '',
+      pass: process.env.SMTP_PASS || '',
+    },
+  });
+  return mailTransporter;
+};
 
 // Validation schema (camelCase for API)
 const contactSchema = Joi.object({
@@ -65,12 +68,14 @@ const submitContact = async (req, res) => {
       <p>This message was sent from the contact form.</p>
     `;
 
-    await transporter.sendMail({
-      from: 'nurbekrasulov71@gmail.com',
-      to: 'nurbekrasulov71@gmail.com',
-      subject: 'New Contact Message from Football News Website',
-      html: adminEmailHtml,
-    });
+    if (process.env.SMTP_USER && process.env.SMTP_PASS) {
+      await getMailTransporter().sendMail({
+        from: process.env.SMTP_FROM || process.env.SMTP_USER,
+        to: process.env.CONTACT_RECEIVER_EMAIL || process.env.SMTP_USER,
+        subject: 'New Contact Message from Football News Website',
+        html: adminEmailHtml,
+      });
+    }
 
     res.status(201).json({
       message: 'Message sent successfully',

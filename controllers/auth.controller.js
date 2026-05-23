@@ -1,21 +1,26 @@
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 const pool = require('../lib/db');
 const Joi = require('joi');
-const { mapBodyToDb } = require('../lib/utils');
 
-// Email transporter
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 465,
-  secure: false,
-  auth: {
-    user: 'nurbekrasulov71@gmail.com',
-    pass: 'uauq pwdu otsm ajeh',
-  },
-});
+const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret_key';
+let mailTransporter = null;
+
+const getMailTransporter = () => {
+  if (mailTransporter) return mailTransporter;
+  const nodemailer = require('nodemailer');
+  mailTransporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST || 'smtp.gmail.com',
+    port: Number(process.env.SMTP_PORT || 465),
+    secure: process.env.SMTP_SECURE === 'true',
+    auth: {
+      user: process.env.SMTP_USER || '',
+      pass: process.env.SMTP_PASS || '',
+    },
+  });
+  return mailTransporter;
+};
 
 // Validation schemas
 const loginSchema = Joi.object({
@@ -44,7 +49,7 @@ const registerSchema = Joi.object({
 
 // Generate JWT token
 const generateToken = (userId, role) => {
-  return jwt.sign({ userId, role }, 'your_jwt_secret_key', { expiresIn: '7d' });
+  return jwt.sign({ userId, role }, JWT_SECRET, { expiresIn: '7d' });
 };
 
 // Register new user
@@ -154,15 +159,17 @@ const forgotPassword = async (req, res) => {
       <p>If you didn't request this, please ignore this email.</p>
     `;
 
-    try {
-      await transporter.sendMail({
-        from: 'noreply@legioners.uz',
-        to: email,
-        subject: 'Password Reset Request',
-        html,
-      });
-    } catch (emailError) {
-      console.error('Email sending failed:', emailError);
+    if (process.env.SMTP_USER && process.env.SMTP_PASS) {
+      try {
+        await getMailTransporter().sendMail({
+          from: process.env.SMTP_FROM || process.env.SMTP_USER,
+          to: email,
+          subject: 'Password Reset Request',
+          html,
+        });
+      } catch (emailError) {
+        console.error('Email sending failed:', emailError.message);
+      }
     }
 
     res.json({ message: 'Password reset email sent' });
