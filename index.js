@@ -25,6 +25,9 @@ const allowedOrigins = (process.env.CORS_ORIGINS || [
   'https://api.legioners.uz',
   'https://legioners.uz',
   'https://www.legioners.uz',
+  'https://legioners.vercel.app/uz/login',
+  'https://legioners.vercel.app/uz/',
+  'https://legioners.vercel.app/',
 ].join(',')).split(',').map((v) => v.trim()).filter(Boolean);
 
 const corsOptions = {
